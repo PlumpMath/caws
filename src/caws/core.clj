@@ -8,15 +8,6 @@
   (:require [clojure.core.async :as async :refer [go go-loop >! <! <!! >!! chan]]
             [clojure.string :as string :refer [join split]]))
 
-;; concept...
-;; every view gets an in-port and an out-port
-;; they can be socket ports, in which case you push bytes onto them
-;; or they can be HTTP ports, in which case you push content onto them
-;; you can also use symbols to push other stuff
-;; like: (go (>! out-port {:headers {:content-type "text/html" :status 200}}))
-;;       (go (>! out-port "<html></html">))
-;;       (go (>! out-port :close))
-
 (def *buffer* (ByteBuffer/allocate 16384)) ;; 16k...
 
 (defn selector [server-socket-channel]
@@ -163,23 +154,6 @@
                      :or {ip "0.0.0.0" port 8080}}]
   (apply react (conj (setup port) router)))
 
-
-;; what I want to do:
-;;
-;; read the full HTTP request in (asynchronously)
-;; then put any content into the in-channel
-;; then route based on the path
-;; so GET /foo HTTP/1.1 will route a :get
-;; (route :get path in-port out-port)
-;;
-;; to do this, I need to buffer all of the content until I've read all of the header
-;; information, and then I'll immediately route, and take any content I have at that
-;; point and dump it onto in-chan.
-;; if/when I get more content, I dump that onto in-chan as well,
-;; and I dump a :closed token onto in-chan when I get there.
-;;
-;;
-
 (def ^:dynamic ^{:private true} *out-channel nil)
 (def ^:dynamic ^{:private true} *in-channel nil)
 (def ^:dynamic ^{:private true} *path nil)
@@ -188,7 +162,7 @@
 (defn route [mappings]
   "TODO: add regex support, too, cuz we should."
   (let [route** (fn route* [mappings full-path path in-chan out-chan]
-                  (loop [prefixes (keys mappings)]
+                  (loop [prefixes (sort (fn [x] (count (str x))) > (keys mappings))]
                     (if (empty? prefixes)
                       (go (>! out-chan 404)
                           (>! out-chan :end))
@@ -256,4 +230,5 @@
 
 (run (route {:get
              {"/foo" {"/bing" bing}
+              "/slow-thing"
               "/" home}}))
