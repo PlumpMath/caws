@@ -215,24 +215,24 @@
            (write-error e)))))))
 
 
-(view home
-      (send-headers {:content-type "text"})
-      (send-body "This is the home page\n"))
+;; (view home
+;;       (send-headers {:content-type "text"})
+;;       (send-body "This is the home page\n"))
 
-(view bing
-      (send-headers {:content-type "text"})
-      (send-body "This is the Bing\n"))
+;; (view bing
+;;       (send-headers {:content-type "text"})
+;;       (send-body "This is the Bing\n"))
 
-(view bang
-      (send-headers {:content-type "text"})
-      (send-body "This is the Bang\n"))
+;; (view bang
+;;       (send-headers {:content-type "text"})
+;;       (send-body "This is the Bang\n"))
 
-(view slow
-      (Thread/sleep 10000)
-      (send-body "Done sleeping"))
+;; (view slow
+;;       (Thread/sleep 10000)
+;;       (send-body "Done sleeping"))
 
-(run (route {:get
-             {"/foo" {"/bing" bing
-                      "/bang" bang}
-              "/slow-thing" slow
-              "/" home}}))
+;; (run (route {:get
+;;              {"/foo" {"/bing" bing
+;;                       "/bang" bang}
+;;               "/slow-thing" slow
+;;               "/" home}}))
