@@ -203,8 +203,15 @@
                                          *in-channel in-chan
                                          *path path
                                          *response-code nil]
-                                 (next)))
-                              ))
+                                 (try
+                                  (next)
+                                  (catch Exception e
+                                    (>! out-chan 500)
+                                    (>! out-chan :body)
+                                    (>! out-chan (str e))
+                                    (>! out-chan :end))
+                                  ))))
+                            )
                           (recur (rest prefixes))
                           )
                         ))))]
