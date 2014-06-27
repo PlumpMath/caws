@@ -227,11 +227,16 @@
       (send-headers {:content-type "text"})
       (send-body "This is the Bing\n"))
 
+(view bang
+      (send-headers {:content-type "text"})
+      (send-body "This is the Bang\n"))
+
 (view slow
       (Thread/sleep 10000)
       (send-body "Done sleeping"))
 
 (run (route {:get
-             {"/foo" {"/bing" bing}
+             {"/foo" {"/bing" bing
+                      "/bang" bang}
               "/slow-thing" slow
               "/" home}}))
