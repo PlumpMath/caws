@@ -106,7 +106,6 @@
 
        (route (keyword (.toLowerCase command)) path in-chan out-chan)
        (go-loop [token (<! out-chan)]
-                (println "TOKEN" token)
                 (cond
                  (instance? Long token)
                  (do (.write socket-channel (string->buffer (str "HTTP " token "\n")))
@@ -198,53 +197,59 @@
                           (let [next (mappings prefix)]
                             (if (instance? java.util.Map next)
                               (route* next full-path (.substring path (count prefix)) in-chan out-chan)
-                              (go
-                               (binding [*out-channel out-chan
-                                         *in-channel in-chan
-                                         *path path
-                                         *response-code nil]
-                                 (try
-                                  (next)
-                                  (catch Exception e
-                                    (>! out-chan 500)
-                                    (>! out-chan :body)
-                                    (>! out-chan (str e))
-                                    (>! out-chan :end))
-                                  ))))
+                              (next path in-chan out-chan))
                             )
                           (recur (rest prefixes))
                           )
                         ))))]
     (fn [command path in-chan out-chan]
-      (println "command = " command)
       (route** (mappings command) path path in-chan out-chan))))
 
-(defn send-code [code]
-  (set! *response-code code)
-  (>!! *out-channel
-      (condp = code
-        :ok 200
-        :error 500
-        :bad-response 400
-        :not-found 404)))
+(defmacro send-code [code]
+  `(let [o# ~'out-chan code# ~code]
+     (set! ~'*response-code code#)
+     (>! o#
+         (condp = code#
+           :ok 200
+           :error 500
+           :bad-response 400
+           :not-found 404))))
 
-(defn send-headers [headers]
-  (if (nil? *response-code)
-    (send-code :ok))
+(defmacro send-headers [headers]
+  `(let [o# ~'out-chan]
+     (if (nil? ~'*response-code)
+       (send-code :ok))
 
-  (>!! *out-channel :headers)
-  (>!! *out-channel headers))
+     (>! o# :headers)
+     (>! o# ~headers)))
 
-(defn send-body [body]
-  (>!! *out-channel :body)
-  (>!! *out-channel body)
-  (>!! *out-channel :end))
+(defmacro send-body [body]
+  `(let [o# ~'out-chan]
+     (>! o# :body)
+     (>! o# ~body)
+     (>! o# :end)))
 
-(defn home []
+(defmacro write-error [e]
+  `(let [o# ~'out-chan]
+     (>! o# 500)
+     (>! o# :body)
+     (>! o# (str ~e))
+     (>! o# :end)))
+
+(defmacro view [name & body]
+  `(defn ~name [~'path ~'in-chan ~'out-chan]
+     (go
+      (binding [~'*response-code nil]
+        (try
+         ~@body
+         (catch Exception e
+           (write-error e)))))))
+
+(view home
   (send-headers {:content-type "text"})
   (send-body "This is the home page\n"))
 
-(defn bing []
+(view bing
   (send-headers {:content-type "text"})
   (send-body "This is the Bing\n"))
 
