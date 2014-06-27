@@ -154,11 +154,6 @@
                      :or {ip "0.0.0.0" port 8080}}]
   (apply react (conj (setup port) router)))
 
-(def ^:dynamic ^{:private true} *out-channel nil)
-(def ^:dynamic ^{:private true} *in-channel nil)
-(def ^:dynamic ^{:private true} *path nil)
-(def ^:dynamic ^{:private true} *response-code nil)
-
 (defn route [mappings]
   "TODO: add regex support, too, cuz we should."
   (let [route** (fn route* [mappings full-path path in-chan out-chan]
@@ -181,7 +176,7 @@
 
 (defmacro send-code [code]
   `(let [o# ~'out-chan code# ~code]
-     (set! ~'*response-code code#)
+     (swap! ~'*response-code (fn [old-code#] code#))
      (>! o#
          (condp = code#
            :ok 200
@@ -191,7 +186,7 @@
 
 (defmacro send-headers [headers]
   `(let [o# ~'out-chan]
-     (if (nil? ~'*response-code)
+     (if (nil? @~'*response-code)
        (send-code :ok))
 
      (>! o# :headers)
@@ -213,11 +208,12 @@
 (defmacro view [name & body]
   `(defn ~name [~'path ~'in-chan ~'out-chan]
      (go
-      (binding [~'*response-code nil]
+      (let [~'*response-code (atom nil)]
         (try
          ~@body
          (catch Exception e
            (write-error e)))))))
+
 
 (view home
       (send-headers {:content-type "text"})
