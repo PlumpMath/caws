@@ -116,6 +116,9 @@
                  (do (write-headers (<! out-chan) socket-channel)
                      (recur (<! out-chan)))
 
+                 (= :end token)
+                 (.close (.socket socket-channel))
+
                  (= :body token)
                  (do (.write socket-channel (string->buffer "\n\n"))
                      (loop [part (<! out-chan)]
@@ -178,45 +181,65 @@
 ;;
 ;;
 
+(def ^:dynamic ^{:private true} *out-channel nil)
+(def ^:dynamic ^{:private true} *in-channel nil)
+(def ^:dynamic ^{:private true} *path nil)
+(def ^:dynamic ^{:private true} *response-code nil)
+
 (defn route [mappings]
   "TODO: add regex support, too, cuz we should."
   (let [route** (fn route* [mappings full-path path in-chan out-chan]
                   (loop [prefixes (keys mappings)]
-                    (let [prefix (first prefixes)]
-                      (println "prefix = " prefix)
-                      (println "path is " path)
-                      (if (.startsWith path prefix)
-                        (let [next (mappings prefix)]
-                          (if (instance? java.util.Map next)
-                            (route* next full-path (.substring path (count prefix)) in-chan out-chan)
-                            (do
-                              (println "invoking" next)
-                              (next path in-chan out-chan))
-                            ))
-                        (recur (rest prefixes))
-                        )
-                      )))]
+                    (if (empty? prefixes)
+                      (go (>! out-chan 404)
+                          (>! out-chan :end))
+                      (let [prefix (first prefixes)]
+                        (if (.startsWith path prefix)
+                          (let [next (mappings prefix)]
+                            (if (instance? java.util.Map next)
+                              (route* next full-path (.substring path (count prefix)) in-chan out-chan)
+                              (go
+                               (binding [*out-channel out-chan
+                                         *in-channel in-chan
+                                         *path path
+                                         *response-code nil]
+                                 (next)))
+                              ))
+                          (recur (rest prefixes))
+                          )
+                        ))))]
     (fn [command path in-chan out-chan]
       (println "command = " command)
       (route** (mappings command) path path in-chan out-chan))))
 
-(defn home [path in-port out-port]
-  (println "HOME")
-  (go (>! out-port 200)
-      (>! out-port :headers)
-      (>! out-port {:content-type "text"})
-      (>! out-port :body)
-      (>! out-port (str path " INDEX\n"))
-      (>! out-port :end)))
+(defn send-code [code]
+  (set! *response-code code)
+  (>!! *out-channel
+      (condp = code
+        :ok 200
+        :error 500
+        :bad-response 400
+        :not-found 404)))
 
-(defn bing [path in-port out-port]
-  (println "BING")
-  (go (>! out-port 200)
-      (>! out-port :headers)
-      (>! out-port {:content-type "text"})
-      (>! out-port :body)
-      (>! out-port (str path " BING\n"))
-      (>! out-port :end)))
+(defn send-headers [headers]
+  (if (nil? *response-code)
+    (send-code :ok))
+
+  (>!! *out-channel :headers)
+  (>!! *out-channel headers))
+
+(defn send-body [body]
+  (>!! *out-channel :body)
+  (>!! *out-channel body)
+  (>!! *out-channel :end))
+
+(defn home []
+  (send-headers {:content-type "text"})
+  (send-body "This is the home page\n"))
+
+(defn bing []
+  (send-headers {:content-type "text"})
+  (send-body "This is the Bing\n"))
 
 
 (run (route {:get
