@@ -5,7 +5,8 @@
            (java.nio.charset Charset)
            (java.net InetSocketAddress)
            (java.io IOException))
-  (:require [clojure.core.async :as async :refer [go go-loop >! <! <!! >!! chan]]))
+  (:require [clojure.core.async :as async :refer [go go-loop >! <! <!! >!! chan]]
+            [clojure.string :as string :refer [join split]]))
 
 ;; concept...
 ;; every view gets an in-port and an out-port
@@ -54,13 +55,18 @@
       (.configureBlocking false)
       (.register selector SelectionKey/OP_READ))))
 
+
+(defn header-string-to-keyword [header-string]
+  (keyword (.trim (.toLowerCase header-string))))
+
 (defn parse-header [header]
-  (let [bits (seq (.split header "\\s+"))]
-    [(first bits) (second bits)])) ;; TODO: I want to use symbols for the header names...
+  (let [bits (seq (.split header "\\s*:\\s*"))]
+    [(header-string-to-keyword (first bits)) (second bits)])) ;; TODO: I want to use symbols for the header names...
 
 (defn parse-headers [header-lines]
+  "Returns a map of keyword -> string value"
   (if header-lines
-    (apply array-map (map parse-header header-lines))
+    (apply array-map (apply concat (map parse-header header-lines)))
     {}))
 
 (defn parse-request [request-string]
@@ -69,21 +75,24 @@
         head-lines (seq (.split (first parts) "\r?\n"))
         request-line (first head-lines)
         header-lines (rest head-lines)
-        body (if (> (count parts) 1) (.join "\n" (rest parts)) nil)]
+        body (if (> (count parts) 1) (join "\n" (rest parts)) nil)]
     (let [_ (seq (.split request-line "\\s+"))
           command (.trim (first _))
           path (.trim (second _))]
       [command path (parse-headers header-lines) body])))
 
 (defn is-full-request? [content]
-  (or (.endsWith content "\n\n") (.endsWith content "\r\n\r\n")))
+  (re-find #"\r?\n\r?\n" content))
 
-(defn route [command path in-port out-port]
-  (println "routing" command path)
-  )
+(defn write-headers [headers socket-channel]
+  (doseq [pair (seq headers)]
+    (let [k (first pair) v (second pair)]
+      (.write socket-channel
+              (string->buffer (str (.substring (str k) 1) ":" v "\n"))))))
 
-(defn route-request [request-string socket-channel]
+(defn route-request [request-string socket-channel route]
   (apply
+
    (fn [command path headers body]
      (println command path headers body)
      (let [in-chan (chan 10) out-chan (chan)] ;; hm... should out-chan be unbuffered?
@@ -95,12 +104,30 @@
          (>!! in-chan :content)
          (>!! in-chan body))
 
-       (route command path in-chan out-chan)
-       )
-     )
+       (route (keyword (.toLowerCase command)) path in-chan out-chan)
+       (go-loop [token (<! out-chan)]
+                (println "TOKEN" token)
+                (cond
+                 (instance? Long token)
+                 (do (.write socket-channel (string->buffer (str "HTTP " token "\n")))
+                     (recur (<! out-chan)))
+
+                 (= :headers token)
+                 (do (write-headers (<! out-chan) socket-channel)
+                     (recur (<! out-chan)))
+
+                 (= :body token)
+                 (do (.write socket-channel (string->buffer "\n\n"))
+                     (loop [part (<! out-chan)]
+                       (if (= :end part)
+                         (.close (.socket socket-channel))
+                         (do (.write socket-channel (string->buffer part))
+                             (recur (<! out-chan)))
+                         )))))))
+
    (parse-request request-string)))
 
-(defn read-socket [selected-key]
+(defn read-socket [selected-key rout]
   (let [socket-channel (.channel selected-key)]
     (.clear *buffer*)
     (.read socket-channel *buffer*)
@@ -114,10 +141,10 @@
         (let [existing-content (.attachment selected-key)]
           (.attach selected-key (str existing-content (buffer->string *buffer*))))
         (if (is-full-request? (.attachment selected-key))
-          (route-request (.attachment selected-key) socket-channel)))
+          (route-request (.attachment selected-key) socket-channel rout)))
       )))
 
-(defn react [selector server-socket]
+(defn react [selector server-socket rout]
   (while true
     (when (> (.select selector) 0)
       (let [selected-keys (.selectedKeys selector)]
@@ -126,13 +153,13 @@
             SelectionKey/OP_ACCEPT
             (accept-connection server-socket selector)
             SelectionKey/OP_READ
-            (read-socket k)))
+            (read-socket k rout)))
         (.clear selected-keys)))))
 
 
 (defn run [router & {:keys [ip port]
                      :or {ip "0.0.0.0" port 8080}}]
-  (apply react (setup port)))
+  (apply react (conj (setup port) router)))
 
 
 ;; what I want to do:
@@ -149,20 +176,49 @@
 ;; if/when I get more content, I dump that onto in-chan as well,
 ;; and I dump a :closed token onto in-chan when I get there.
 ;;
-;; 
+;;
 
-(defn routes [mappings]
+(defn route [mappings]
+  "TODO: add regex support, too, cuz we should."
+  (let [route** (fn route* [mappings full-path path in-chan out-chan]
+                  (loop [prefixes (keys mappings)]
+                    (let [prefix (first prefixes)]
+                      (println "prefix = " prefix)
+                      (println "path is " path)
+                      (if (.startsWith path prefix)
+                        (let [next (mappings prefix)]
+                          (if (instance? java.util.Map next)
+                            (route* next full-path (.substring path (count prefix)) in-chan out-chan)
+                            (do
+                              (println "invoking" next)
+                              (next path in-chan out-chan))
+                            ))
+                        (recur (rest prefixes))
+                        )
+                      )))]
+    (fn [command path in-chan out-chan]
+      (println "command = " command)
+      (route** (mappings command) path path in-chan out-chan))))
 
-  ;; (loop [prefixes (keys mappings)]
-  ;;   (let [prefix (first prefixes)]
-  ;;     (if (.startsWith path prefix)
-  ;;       (let [next (mappings prefix)]
-  ;;         (if (instance? java.util.Map next)
-  ;;           (invoke-view (.substring path (count prefix)) next)
-  ;;           (next))))))
-  )
+(defn home [path in-port out-port]
+  (println "HOME")
+  (go (>! out-port 200)
+      (>! out-port :headers)
+      (>! out-port {:content-type "text"})
+      (>! out-port :body)
+      (>! out-port (str path " INDEX\n"))
+      (>! out-port :end)))
 
-(defn bing [in-port out-port]
-  )
+(defn bing [path in-port out-port]
+  (println "BING")
+  (go (>! out-port 200)
+      (>! out-port :headers)
+      (>! out-port {:content-type "text"})
+      (>! out-port :body)
+      (>! out-port (str path " BING\n"))
+      (>! out-port :end)))
 
-(run (routes {"/foo" {"/bing" bing}}))
+
+(run (route {:get
+             {"/foo" {"/bing" bing}
+              "/" home}}))
