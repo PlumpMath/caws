@@ -162,7 +162,7 @@
 (defn route [mappings]
   "TODO: add regex support, too, cuz we should."
   (let [route** (fn route* [mappings full-path path in-chan out-chan]
-                  (loop [prefixes (sort (fn [x] (count (str x))) > (keys mappings))]
+                  (loop [prefixes (sort-by (fn [x] (count (str x))) > (keys mappings))]
                     (if (empty? prefixes)
                       (go (>! out-chan 404)
                           (>! out-chan :end))
@@ -220,15 +220,18 @@
            (write-error e)))))))
 
 (view home
-  (send-headers {:content-type "text"})
-  (send-body "This is the home page\n"))
+      (send-headers {:content-type "text"})
+      (send-body "This is the home page\n"))
 
 (view bing
-  (send-headers {:content-type "text"})
-  (send-body "This is the Bing\n"))
+      (send-headers {:content-type "text"})
+      (send-body "This is the Bing\n"))
 
+(view slow
+      (Thread/sleep 10000)
+      (send-body "Done sleeping"))
 
 (run (route {:get
              {"/foo" {"/bing" bing}
-              "/slow-thing"
+              "/slow-thing" slow
               "/" home}}))
