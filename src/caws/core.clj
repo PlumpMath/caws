@@ -117,7 +117,7 @@
                          (.close (.socket socket-channel))
                          (let [buffer (string->buffer part)]
                            (while (> (.remaining buffer) 0)
-                                  (.write socket-channel buffer))
+                                  (println "wrote" (.write socket-channel buffer) "bytes, still have" (.remaining buffer)))
                            (recur (<! out-chan)))
                          )))))))
 
