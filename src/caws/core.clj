@@ -115,7 +115,9 @@
                      (loop [part (<! out-chan)]
                        (if (= :end part)
                          (.close (.socket socket-channel))
-                         (do (.write socket-channel (string->buffer part))
+                         (do (println (count part))
+                             (println (string->buffer part))
+                             (.write socket-channel (string->buffer part))
                              (recur (<! out-chan)))
                          )))))))
 
