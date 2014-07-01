@@ -6,6 +6,7 @@
            (java.net InetSocketAddress)
            (java.io IOException))
   (:require [clojure.core.async :as async :refer [go go-loop >! <! <!! >!! chan]]
+            [clojure.java.io :as io]
             [clojure.string :as string :refer [join split]]))
 
 (def *buffer* (ByteBuffer/allocate 16384)) ;; 16k...
@@ -215,21 +216,28 @@
            (write-error e)))))))
 
 (defmacro read-token []
-  (<! ~'in-chan))
+  `(<! ~'in-chan))
 
-(defmacro path [] ~'path)
+(defmacro get-path [] `~'path)
 
 (defn remove-prefix [prefix str]
   (.substring str (count prefix)))
 
 (defmacro static-view [name internal-base external-base]
-  `(view ~'static
-         (clojure.java.io/resource (str internal-base (remove-prefix external-base (path))))))
+  `(defn ~name [~'path ~'in-chan ~'out-chan]
+     (go
+      (let [~'*response-code (atom nil)]
+        (try
+         (send-headers {:content-type "text/javascript"})
+         (send-body (slurp (io/file (io/resource (str ~internal-base (remove-prefix ~external-base (get-path)))))))
+         (catch Exception e
+           (write-error e)))))))
 
+;; (static-view js "js" "/js")
 
 ;; (view home
-;;       (send-headers {:content-type "text"})
-;;       (send-body "This is the home page\n"))
+;;       (send-headers {:content-type "text/html"})
+;;       (send-body "This is the home page<script src='/js/test.js'></script>\n"))
 
 ;; (view bing
 ;;       (send-headers {:content-type "text"})
@@ -244,7 +252,8 @@
 ;;       (send-body "Done sleeping"))
 
 ;; (run (route {:get
-;;              {"/foo" {"/bing" bing
+;;              {"/js" js
+;;               "/foo" {"/bing" bing
 ;;                       "/bang" bang}
 ;;               "/slow-thing" slow
 ;;               "/" home}}))
