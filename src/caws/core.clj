@@ -214,6 +214,18 @@
          (catch Exception e
            (write-error e)))))))
 
+(defmacro read []
+  (<! ~'in-chan))
+
+(defmacro path [] ~'path)
+
+(defn remove-prefix [prefix str]
+  (.substring str (count prefix)))
+
+(defmacro static-view [name internal-base external-base]
+  `(view ~'static
+         (clojure.java.io/resource (str internal-base (remove-prefix external-base (path))))))
+
 
 ;; (view home
 ;;       (send-headers {:content-type "text"})
