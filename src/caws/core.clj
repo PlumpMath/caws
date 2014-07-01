@@ -115,10 +115,10 @@
                      (loop [part (<! out-chan)]
                        (if (= :end part)
                          (.close (.socket socket-channel))
-                         (do (println (count part))
-                             (println (string->buffer part))
-                             (.write socket-channel (string->buffer part))
-                             (recur (<! out-chan)))
+                         (let [buffer (string->buffer part)]
+                           (while (> (.remaining buffer) 0)
+                                  (.write socket-channel buffer))
+                           (recur (<! out-chan)))
                          )))))))
 
    (parse-request request-string)))
