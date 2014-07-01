@@ -214,7 +214,7 @@
          (catch Exception e
            (write-error e)))))))
 
-(defmacro read []
+(defmacro read-token []
   (<! ~'in-chan))
 
 (defmacro path [] ~'path)
