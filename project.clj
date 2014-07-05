@@ -1,4 +1,4 @@
-(defproject org.clojars.kiril/caws "0.1.14"
+(defproject org.clojars.kiril/caws "0.1.15"
   :description "a core.async web server, just... caws..."
   :url "http://github.com/kiril/caws"
   :license {:name "MIT License"

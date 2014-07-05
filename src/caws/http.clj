@@ -99,9 +99,8 @@
 (defn write-response [request response socket-channel]
   (println "RS" (:method request) (:path request) (:code response) (:headers response))
   (write-response-code (:code response) socket-channel)
+  (write-headers (:headers response) socket-channel)
   (let [body-buffer (util/string->buffer (str "\n\n" (:body response)))]
-    (write-headers (assoc (:headers response) :content-length (.remaining body-buffer))
-                   socket-channel)
     (.write socket-channel body-buffer)))
 
 (defn is-full-request? [content]
