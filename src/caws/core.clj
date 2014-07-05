@@ -26,8 +26,8 @@
     [(selector server-socket-channel)
      server-socket]))
 
-(defn state= [state channel]
-  (= (bit-and (.readyOps channel) state) state))
+(defn state= [state ready-ops]
+  (= (bit-and ready-ops state) state))
 
 (defn accept-connection [server-socket selector]
   (let [channel (-> server-socket (.accept) (.getChannel))]
@@ -39,6 +39,7 @@
 
 (defn route-request [metadata socket-channel router]
   (let [request (http/parse-request (:body metadata))]
+    (println "RQ" (:method request) (:path request) (:headers request))
     (router request (:in metadata) (:out metadata))
     (go-loop [token (<! (:out metadata))]
              (cond
@@ -49,44 +50,49 @@
               (.write socket-channel (util/string->buffer token))
 
               :else
-              (http/write-response token socket-channel)
-              )
+              (http/write-response request token socket-channel))
              (if (not (= :end token))
                (recur (<! (:out metadata)))))))
 
 
 (defn read-socket [selected-key rout]
   (let [socket-channel (.channel selected-key)]
-    (.clear *buffer*)
-    (.read socket-channel *buffer*)
-    (.flip *buffer*)
-    (if (= (.limit *buffer*) 0)
-      (do
-        (println "Lost connection from" socket-channel)
-        (.cancel selected-key)
-        (.close (.socket socket-channel)))
-      (do
-        (let [metadata (.attachment selected-key)
-              body (metadata :body)]
-          (.attach selected-key (assoc metadata :body (str body (util/buffer->string *buffer*))))
-          (if (http/is-full-request? (:body metadata))
-            (route-request metadata socket-channel rout))))
-      )))
+    (try
+     (.clear *buffer*)
+     (.read socket-channel *buffer*)
+     (.flip *buffer*)
+     (if (= (.limit *buffer*) 0)
+       (do
+         (println "Lost connection from" socket-channel)
+         (.cancel selected-key)
+         (.close (.socket socket-channel)))
+       (do
+         (let [_metadata (.attachment selected-key)
+               _body (_metadata :body)
+               body (str _body (util/buffer->string *buffer*))
+               metadata (assoc _metadata :body body)]
+           (.attach selected-key metadata)
+           (if (http/is-full-request? body)
+             (route-request metadata socket-channel rout)))))
+     (catch Exception e
+       (.printStackTrace e)))))
 
 
-(defn react [selector server-socket rout]
+(defn react [selector server-socket router]
   (while true
     (when (> (.select selector) 0)
       (let [selected-keys (.selectedKeys selector)]
         (doseq [key selected-keys]
-          (condp state= key
-            SelectionKey/OP_ACCEPT
-            (do
-              (.attach key {:body nil :in (chan) :out (chan)})
-              (accept-connection server-socket selector))
+          (when (.isValid key)
+            (condp state= (.readyOps key)
+              SelectionKey/OP_ACCEPT
+              (accept-connection server-socket selector)
 
-            SelectionKey/OP_READ
-            (read-socket key rout)))
+              SelectionKey/OP_READ
+              (do
+                (if (nil? (.attachment key))
+                  (.attach key {:body nil :in (chan) :out (chan)}))
+                (read-socket key router)))))
         (.clear selected-keys)))))
 
 
@@ -94,13 +100,61 @@
                      :or {ip "0.0.0.0" port 8080}}]
   (apply react (conj (setup port) router)))
 
+(def ^:dynamic *response* nil)
+(def ^:dynamic *request* nil)
+(def ^:dynamic *input* nil)
+(def ^:dynamic *output* nil)
+
+(defn set-response-code! [code]
+  (set! *response* (assoc *response* :code code)))
+
+(defn set-header! [k v]
+  (set! *response* (assoc *response* :headers (assoc (:headers *response*) k v))))
+
+(defn set-headers! [m]
+  (set! *response* (assoc *response* :headers {})))
+
+(defn set-body! [s]
+  (set! *response* (assoc *response* :body s)))
+
+(defn set-content-length [response]
+  (assoc response
+    :headers (assoc (:headers response) :content-length (count (:body response)))))
+
+(defn ensure-finished [response]
+  (set-content-length
+   (if (and (not (nil? (:code response))) (not (nil? (:body response))))
+     response
+     (assoc response
+       :code (or (:code response) :ok)
+       :body (or (:body response) "")))))
+
+(defmacro finish []
+  `(do
+     (>! ~'*output* (ensure-finished *response*))
+     (>! ~'*output* :end)))
+
+(defmacro handle-error [e]
+  `(let [e# ~e]
+     (.printStackTrace e#)
+     (binding [*response* (http/make-response :error {} (str e#))]
+       (finish))))
+
+(defmacro handle-missing [path]
+  `(let [path# ~path]
+     (println (str path# " Not Found"))
+     (binding [*response* (http/make-response :not-found {} (str path# " Not Found"))]
+       (finish))))
+
 (defn route [mappings]
   "TODO: add regex support, too, cuz we should."
   (let [route** (fn route* [mappings path request in-chan out-chan]
                   (loop [prefixes (sort-by (fn [x] (count (str x))) > (keys mappings))]
                     (if (empty? prefixes)
-                      (go (>! out-chan 404)
-                          (>! out-chan :end))
+                      (go
+                       (binding [*output* out-chan]
+                         (handle-missing (:path request))))
+
                       (let [prefix (first prefixes)]
                         (if (.startsWith path prefix)
                           (let [next (mappings prefix)]
@@ -112,59 +166,10 @@
                           )
                         ))))]
     (fn [request in-chan out-chan]
-      (route** (mappings (:command request)) (:path request) request in-chan out-chan))))
+      (route** (mappings (:method request)) (:path request) request in-chan out-chan))))
 
 
-(def ^:dynamic *response* nil)
-(def ^:dynamic *request* nil)
-(def ^:dynamic *input* nil)
-(def ^:dynamic *output* nil)
 
-
-(defn set-response-code! [code]
-  (set! *response* (assoc *response* :code code)))
-
-
-(defn set-header! [k v]
-  (set! *response* (assoc *response* :headers (assoc (:headers *response*) k v))))
-
-
-(defn set-headers! [m]
-  (set! *response* (assoc *response* :headers {})))
-
-
-(defn set-body! [s]
-  (set! *response* (assoc *response* :body s)))
-
-
-(defn set-content-length [response]
-  (assoc response
-    :headers (assoc (:headers response) :content-length (count (:body response)))))
-
-
-(defn ensure-finished [response]
-  (set-content-length
-   (if (and (not (nil? (:code response))) (not (nil? (:body response))))
-     response
-     (assoc response
-       :code (or (:code response) :ok)
-       :body (or (:body response) "")))))
-
-
-(defmacro finish []
-  `(do
-     (>! ~'output (ensure-finished response))
-     (>! ~'output :end)))
-
-
-(defmacro handle-error [e]
-  '(let [e# ~e]
-     (.printStackTrace e#)
-     (assoc response
-       :code :error
-       :headers {}
-       :body (str e#))
-     (finish)))
 
 (defn request-body [] (:body *request*))
 (defn request-headers [] (:headers *request*))
@@ -179,12 +184,16 @@
 
 (defn ->lookup-pair [[param-type name]] `[~name (~(->param-getter param-type) ~(str name))])
 
+(defn remove-prefix [prefix str]
+  (.substring str (count prefix)))
+
 (defn parse-view-params [params]
   (vec (concat [(first params) '*request*]
                (apply concat (map ->lookup-pair (partition 2 (rest params)))))))
 
 (defmacro view [name params & body]
   `(defn ~name [~'--caws-request ~'--caws-in-chan ~'--caws-out-chan]
+     (assert ~'--caws-out-chan)
      (go
       (binding [~'*request* ~'--caws-request
                 ~'*input* ~'--caws-in-chan
@@ -196,48 +205,45 @@
          (catch Exception e
            (handle-error e)))))))
 
-;;(view x [req :get foo :post bing]
-
-
-(defmacro read-token []
-  `(<! ~'in-chan))
-
-(defmacro get-path [] `~'path)
-
-(defn remove-prefix [prefix str]
-  (.substring str (count prefix)))
-
 (defmacro static-view [name internal-base external-base]
-  `(defn ~name [~'request ~'in-chan ~'out-chan]
+  `(defn ~name [~'--caws-request ~'--caws-in-chan ~'--caws-out-chan]
      (go
-      (let [~'*response-code (atom nil)]
+      (binding [~'*request* ~'--caws-request
+                ~'*input* ~'--caws-in-chan
+                ~'*output* ~'--caws-out-chan
+                ~'*response* (http/empty-response)]
         (try
-         (send-headers {:content-type "text/javascript"})
-         (send-body (slurp (io/file (io/resource (str ~internal-base (remove-prefix ~external-base (get-path)))))))
+         (set-headers! {:content-type "text/javascript"})
+         (set-body! (slurp (io/file (io/resource (str ~internal-base (remove-prefix ~external-base (:path ~'*request*)))))))
+         (finish)
          (catch Exception e
-           (write-error e)))))))
+           (handle-error e)))))))
 
-;; (static-view js "js" "/js")
+(static-view js "js" "/js")
 
-;; (view home
-;;       (send-headers {:content-type "text/html"})
-;;       (send-body "This is the home page<script src='/js/test.js'></script>\n"))
+(view home [request]
+      (set-headers! {:content-type "text/html"})
+      (set-body! "<html>This is the home page<script src='/js/test.js'></script></html>\n")
+      (finish))
 
-;; (view bing
-;;       (send-headers {:content-type "text"})
-;;       (send-body "This is the Bing\n"))
+(view bing [request]
+      (set-headers! {:content-type "text"})
+      (set-body! "This is the Bing\n")
+      (finish))
 
-;; (view bang
-;;       (send-headers {:content-type "text"})
-;;       (send-body "This is the Bang\n"))
+(view bang [request]
+      (set-headers! {:content-type "text"})
+      (set-body! "This is the Bang\n")
+      (finish))
 
-;; (view slow
-;;       (Thread/sleep 10000)
-;;       (send-body "Done sleeping"))
+(view slow [request]
+      (Thread/sleep 10000)
+      (set-body! "Done sleeping")
+      (finish))
 
-;; (run (route {:get
-;;              {"/js" js
-;;               "/foo" {"/bing" bing
-;;                       "/bang" bang}
-;;               "/slow-thing" slow
-;;               "/" home}}))
+(run (route {:get
+             {"/js" js
+              "/foo" {"/bing" bing
+                      "/bang" bang}
+              "/slow-thing" slow
+              "/" home}}))

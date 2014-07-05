@@ -5,6 +5,9 @@
 (defrecord Request [method path headers get post body])
 (defrecord Response [code headers body])
 
+(defn make-response [code headers body]
+  (Response. code headers body))
+
 (defn symbol->code [s]
   (condp = s
     :ok 200
@@ -93,7 +96,8 @@
   (let [numeric (symbol->code code)]
     (.write socket-channel (util/string->buffer (str "HTTP " numeric " " (code->string numeric) "\n")))))
 
-(defn write-response [response socket-channel]
+(defn write-response [request response socket-channel]
+  (println "RS" (:method request) (:path request) (:code response) (:headers response))
   (write-response-code (:code response) socket-channel)
   (write-headers (:headers response) socket-channel)
   (.write socket-channel (util/string->buffer "\n\n"))
