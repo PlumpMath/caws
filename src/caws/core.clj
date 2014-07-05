@@ -219,31 +219,31 @@
          (catch Exception e
            (handle-error e)))))))
 
-(static-view js "js" "/js")
+;; (static-view js "js" "/js")
 
-(view home [request]
-      (set-headers! {:content-type "text/html"})
-      (set-body! "<html>This is the home page<script src='/js/test.js'></script></html>\n")
-      (finish))
+;; (view home [request]
+;;       (set-headers! {:content-type "text/html"})
+;;       (set-body! "<html>This is the home page<script src='/js/test.js'></script></html>\n")
+;;       (finish))
 
-(view bing [request]
-      (set-headers! {:content-type "text"})
-      (set-body! "This is the Bing\n")
-      (finish))
+;; (view bing [request]
+;;       (set-headers! {:content-type "text"})
+;;       (set-body! "This is the Bing\n")
+;;       (finish))
 
-(view bang [request :get token]
-      (set-headers! {:content-type "text"})
-      (set-body! (str "This is the Bang, and I got " token " \n"))
-      (finish))
+;; (view bang [request :get token]
+;;       (set-headers! {:content-type "text"})
+;;       (set-body! (str "This is the Bang, and I got " token " \n"))
+;;       (finish))
 
-(view slow [request]
-      (Thread/sleep 10000)
-      (set-body! "Done sleeping")
-      (finish))
+;; (view slow [request]
+;;       (Thread/sleep 10000)
+;;       (set-body! "Done sleeping")
+;;       (finish))
 
-(run (route {:get
-             {"/js" js
-              "/foo" {"/bing" bing
-                      "/bang" bang}
-              "/slow-thing" slow
-              "/" home}}))
+;; (run (route {:get
+;;              {"/js" js
+;;               "/foo" {"/bing" bing
+;;                       "/bang" bang}
+;;               "/slow-thing" slow
+;;               "/" home}}))
