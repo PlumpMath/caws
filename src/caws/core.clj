@@ -117,17 +117,12 @@
 (defn set-body! [s]
   (set! *response* (assoc *response* :body s)))
 
-(defn set-content-length [response]
-  (assoc response
-    :headers (assoc (:headers response) :content-length (count (:body response)))))
-
 (defn ensure-finished [response]
-  (set-content-length
-   (if (and (not (nil? (:code response))) (not (nil? (:body response))))
-     response
-     (assoc response
-       :code (or (:code response) :ok)
-       :body (or (:body response) "")))))
+  (if (and (not (nil? (:code response))) (not (nil? (:body response))))
+    response
+    (assoc response
+      :code (or (:code response) :ok)
+      :body (or (:body response) ""))))
 
 (defmacro finish []
   `(do
@@ -179,8 +174,8 @@
 (defn POST [key] ((:post *request*) key))
 
 (defn ->param-getter [param-type]
-  (assert (or (= :get param-type) (= :post param-type)))
-  ({:get 'GET :post 'POST} param-type))
+  (assert (or (= :get param-type) (= :post param-type)) param-type)
+  ({:get GET :post POST} param-type))
 
 (defn ->lookup-pair [[param-type name]] `[~name (~(->param-getter param-type) ~(str name))])
 
@@ -192,6 +187,7 @@
                (apply concat (map ->lookup-pair (partition 2 (rest params)))))))
 
 (defmacro view [name params & body]
+  (assert (vector? params) "(view <name> [<params])")
   `(defn ~name [~'--caws-request ~'--caws-in-chan ~'--caws-out-chan]
      (assert ~'--caws-out-chan)
      (go
