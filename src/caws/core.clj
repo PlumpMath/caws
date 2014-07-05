@@ -231,9 +231,9 @@
       (set-body! "This is the Bing\n")
       (finish))
 
-(view bang [request]
+(view bang [request :get token]
       (set-headers! {:content-type "text"})
-      (set-body! "This is the Bang\n")
+      (set-body! (str "This is the Bang, and I got " token " \n"))
       (finish))
 
 (view slow [request]
