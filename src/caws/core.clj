@@ -47,7 +47,9 @@
               (.close (.socket socket-channel))
 
               (instance? String token)
-              (.write socket-channel (util/string->buffer token))
+              (let [buffer (util/string->buffer token)]
+                (while (> (.remaining buffer) 0)
+                       (.write socket-channel buffer)))
 
               :else
               (http/write-response request token socket-channel))

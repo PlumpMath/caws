@@ -101,7 +101,8 @@
   (write-response-code (:code response) socket-channel)
   (write-headers (:headers response) socket-channel)
   (let [body-buffer (util/string->buffer (str "\n\n" (:body response)))]
-    (.write socket-channel body-buffer)))
+    (while (> (.remaining body-buffer) 0)
+           (.write socket-channel body-buffer))))
 
 (defn is-full-request? [content]
   (re-find #"\r?\n\r?\n" content))
