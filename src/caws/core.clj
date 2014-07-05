@@ -5,9 +5,10 @@
            (java.nio.charset Charset)
            (java.net InetSocketAddress)
            (java.io IOException))
+  (:require [caws.http :as http]
+            [caws.util :as util])
   (:require [clojure.core.async :as async :refer [go go-loop >! <! <!! >!! chan]]
-            [clojure.java.io :as io]
-            [clojure.string :as string :refer [join split]]))
+            [clojure.java.io :as io]))
 
 (def *buffer* (ByteBuffer/allocate 16384)) ;; 16k...
 
@@ -28,18 +29,6 @@
 (defn state= [state channel]
   (= (bit-and (.readyOps channel) state) state))
 
-(defn buffer->string
-  ([byte-buffer]
-   (buffer->string byte-buffer (Charset/defaultCharset)))
-  ([byte-buffer charset]
-   (.toString (.decode charset byte-buffer))))
-
-(defn string->buffer
-  ([string]
-   (string->buffer string (Charset/defaultCharset)))
-  ([string charset]
-   (.encode charset string)))
-
 (defn accept-connection [server-socket selector]
   (let [channel (-> server-socket (.accept) (.getChannel))]
     (println "Connection from" channel)
@@ -48,80 +37,23 @@
       (.register selector SelectionKey/OP_READ))))
 
 
-(defn header-string-to-keyword [header-string]
-  (keyword (.trim (.toLowerCase header-string))))
+(defn route-request [metadata socket-channel router]
+  (let [request (http/parse-request (:body metadata))]
+    (router request (:in metadata) (:out metadata))
+    (go-loop [token (<! (:out metadata))]
+             (cond
+              (= :end token)
+              (.close (.socket socket-channel))
 
-(defn parse-header [header]
-  (let [bits (seq (.split header "\\s*:\\s*"))]
-    [(header-string-to-keyword (first bits)) (second bits)])) ;; TODO: I want to use symbols for the header names...
+              (instance? String token)
+              (.write socket-channel (util/string->buffer token))
 
-(defn parse-headers [header-lines]
-  "Returns a map of keyword -> string value"
-  (if header-lines
-    (apply array-map (apply concat (map parse-header header-lines)))
-    {}))
+              :else
+              (http/write-response token socket-channel)
+              )
+             (if (not (= :end token))
+               (recur (<! (:out metadata)))))))
 
-(defn parse-request [request-string]
-  "returns [method path headers body]"
-  (let [parts (seq (.split request-string "\r?\n\r?\n"))
-        head-lines (seq (.split (first parts) "\r?\n"))
-        request-line (first head-lines)
-        header-lines (rest head-lines)
-        body (if (> (count parts) 1) (join "\n" (rest parts)) nil)]
-    (let [_ (seq (.split request-line "\\s+"))
-          command (.trim (first _))
-          path (.trim (second _))]
-      [command path (parse-headers header-lines) body])))
-
-(defn is-full-request? [content]
-  (re-find #"\r?\n\r?\n" content))
-
-(defn write-headers [headers socket-channel]
-  (doseq [pair (seq headers)]
-    (let [k (first pair) v (second pair)]
-      (.write socket-channel
-              (string->buffer (str (.substring (str k) 1) ":" v "\n"))))))
-
-(defn route-request [request-string socket-channel route]
-  (apply
-
-   (fn [command path headers body]
-     (println command path headers body)
-     (let [in-chan (chan 10) out-chan (chan)] ;; hm... should out-chan be unbuffered?
-       (when headers
-         (>!! in-chan :headers)
-         (>!! in-chan headers))
-
-       (when body
-         (>!! in-chan :content)
-         (>!! in-chan body))
-
-       (route (keyword (.toLowerCase command)) path in-chan out-chan)
-       (go-loop [token (<! out-chan)]
-                (cond
-                 (instance? Long token)
-                 (do (.write socket-channel (string->buffer (str "HTTP " token "\n")))
-                     (recur (<! out-chan)))
-
-                 (= :headers token)
-                 (do (write-headers (<! out-chan) socket-channel)
-                     (recur (<! out-chan)))
-
-                 (= :end token)
-                 (.close (.socket socket-channel))
-
-                 (= :body token)
-                 (do (.write socket-channel (string->buffer "\n\n"))
-                     (loop [part (<! out-chan)]
-                       (if (= :end part)
-                         (.close (.socket socket-channel))
-                         (let [buffer (string->buffer part)]
-                           (while (> (.remaining buffer) 0)
-                                  (println "wrote" (.write socket-channel buffer) "bytes, still have" (.remaining buffer)))
-                           (recur (<! out-chan)))
-                         )))))))
-
-   (parse-request request-string)))
 
 (defn read-socket [selected-key rout]
   (let [socket-channel (.channel selected-key)]
@@ -134,22 +66,27 @@
         (.cancel selected-key)
         (.close (.socket socket-channel)))
       (do
-        (let [existing-content (.attachment selected-key)]
-          (.attach selected-key (str existing-content (buffer->string *buffer*))))
-        (if (is-full-request? (.attachment selected-key))
-          (route-request (.attachment selected-key) socket-channel rout)))
+        (let [metadata (.attachment selected-key)
+              body (metadata :body)]
+          (.attach selected-key (assoc metadata :body (str body (util/buffer->string *buffer*))))
+          (if (http/is-full-request? (:body metadata))
+            (route-request metadata socket-channel rout))))
       )))
+
 
 (defn react [selector server-socket rout]
   (while true
     (when (> (.select selector) 0)
       (let [selected-keys (.selectedKeys selector)]
-        (doseq [k selected-keys]
-          (condp state= k
+        (doseq [key selected-keys]
+          (condp state= key
             SelectionKey/OP_ACCEPT
-            (accept-connection server-socket selector)
+            (do
+              (.attach key {:body nil :in (chan) :out (chan)})
+              (accept-connection server-socket selector))
+
             SelectionKey/OP_READ
-            (read-socket k rout)))
+            (read-socket key rout)))
         (.clear selected-keys)))))
 
 
@@ -159,7 +96,7 @@
 
 (defn route [mappings]
   "TODO: add regex support, too, cuz we should."
-  (let [route** (fn route* [mappings full-path path in-chan out-chan]
+  (let [route** (fn route* [mappings path request in-chan out-chan]
                   (loop [prefixes (sort-by (fn [x] (count (str x))) > (keys mappings))]
                     (if (empty? prefixes)
                       (go (>! out-chan 404)
@@ -168,54 +105,99 @@
                         (if (.startsWith path prefix)
                           (let [next (mappings prefix)]
                             (if (instance? java.util.Map next)
-                              (route* next full-path (.substring path (count prefix)) in-chan out-chan)
-                              (next path in-chan out-chan))
+                              (route* next (.substring path (count prefix)) request in-chan out-chan)
+                              (next request in-chan out-chan))
                             )
                           (recur (rest prefixes))
                           )
                         ))))]
-    (fn [command path in-chan out-chan]
-      (route** (mappings command) path path in-chan out-chan))))
+    (fn [request in-chan out-chan]
+      (route** (mappings (:command request)) (:path request) request in-chan out-chan))))
 
-(defmacro send-code [code]
-  `(let [o# ~'out-chan code# ~code]
-     (swap! ~'*response-code (fn [old-code#] code#))
-     (>! o#
-         (condp = code#
-           :ok 200
-           :error 500
-           :bad-response 400
-           :not-found 404))))
 
-(defmacro send-headers [headers]
-  `(let [o# ~'out-chan]
-     (if (nil? @~'*response-code)
-       (send-code :ok))
+(def ^:dynamic *response* nil)
+(def ^:dynamic *request* nil)
+(def ^:dynamic *input* nil)
+(def ^:dynamic *output* nil)
 
-     (>! o# :headers)
-     (>! o# ~headers)))
 
-(defmacro send-body [body]
-  `(let [o# ~'out-chan]
-     (>! o# :body)
-     (>! o# ~body)
-     (>! o# :end)))
+(defn set-response-code! [code]
+  (set! *response* (assoc *response* :code code)))
 
-(defmacro write-error [e]
-  `(let [o# ~'out-chan]
-     (>! o# 500)
-     (>! o# :body)
-     (>! o# (str ~e))
-     (>! o# :end)))
 
-(defmacro view [name & body]
-  `(defn ~name [~'path ~'in-chan ~'out-chan]
+(defn set-header! [k v]
+  (set! *response* (assoc *response* :headers (assoc (:headers *response*) k v))))
+
+
+(defn set-headers! [m]
+  (set! *response* (assoc *response* :headers {})))
+
+
+(defn set-body! [s]
+  (set! *response* (assoc *response* :body s)))
+
+
+(defn set-content-length [response]
+  (assoc response
+    :headers (assoc (:headers response) :content-length (count (:body response)))))
+
+
+(defn ensure-finished [response]
+  (set-content-length
+   (if (and (not (nil? (:code response))) (not (nil? (:body response))))
+     response
+     (assoc response
+       :code (or (:code response) :ok)
+       :body (or (:body response) "")))))
+
+
+(defmacro finish []
+  `(do
+     (>! ~'output (ensure-finished response))
+     (>! ~'output :end)))
+
+
+(defmacro handle-error [e]
+  '(let [e# ~e]
+     (.printStackTrace e#)
+     (assoc response
+       :code :error
+       :headers {}
+       :body (str e#))
+     (finish)))
+
+(defn request-body [] (:body *request*))
+(defn request-headers [] (:headers *request*))
+(defn request-method [] (:method *request*))
+
+(defn GET [key] ((:get *request*) key))
+(defn POST [key] ((:post *request*) key))
+
+(defn ->param-getter [param-type]
+  (assert (or (= :get param-type) (= :post param-type)))
+  ({:get 'GET :post 'POST} param-type))
+
+(defn ->lookup-pair [[param-type name]] `[~name (~(->param-getter param-type) ~(str name))])
+
+(defn parse-view-params [params]
+  (vec (concat [(first params) '*request*]
+               (apply concat (map ->lookup-pair (partition 2 (rest params)))))))
+
+(defmacro view [name params & body]
+  `(defn ~name [~'--caws-request ~'--caws-in-chan ~'--caws-out-chan]
      (go
-      (let [~'*response-code (atom nil)]
+      (binding [~'*request* ~'--caws-request
+                ~'*input* ~'--caws-in-chan
+                ~'*output* ~'--caws-out-chan
+                ~'*response* (http/empty-response)]
         (try
-         ~@body
+         (let ~(parse-view-params params) ;; [request ...]
+           ~@body)
          (catch Exception e
-           (write-error e)))))))
+           (handle-error e)))))))
+
+;;(view x [req :get foo :post bing]
+
 
 (defmacro read-token []
   `(<! ~'in-chan))
@@ -226,7 +208,7 @@
   (.substring str (count prefix)))
 
 (defmacro static-view [name internal-base external-base]
-  `(defn ~name [~'path ~'in-chan ~'out-chan]
+  `(defn ~name [~'request ~'in-chan ~'out-chan]
      (go
       (let [~'*response-code (atom nil)]
         (try
