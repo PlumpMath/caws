@@ -131,8 +131,8 @@
 
 (defmacro finish []
   `(do
-     (>! ~'*output* (ensure-finished *response*))
-     (>! ~'*output* :end)))
+     (>! *output* (ensure-finished *response*))
+     (>! *output* :end)))
 
 (defmacro handle-error [e]
   `(let [e# ~e]
