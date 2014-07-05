@@ -195,10 +195,10 @@
   `(defn ~name [~'--caws-request ~'--caws-in-chan ~'--caws-out-chan]
      (assert ~'--caws-out-chan)
      (go
-      (binding [~'*request* ~'--caws-request
-                ~'*input* ~'--caws-in-chan
-                ~'*output* ~'--caws-out-chan
-                ~'*response* (http/empty-response)]
+      (binding [*request* ~'--caws-request
+                *input* ~'--caws-in-chan
+                *output* ~'--caws-out-chan
+                *response* (http/empty-response)]
         (try
          (let ~(parse-view-params params) ;; [request ...]
            ~@body)
@@ -208,13 +208,13 @@
 (defmacro static-view [name internal-base external-base]
   `(defn ~name [~'--caws-request ~'--caws-in-chan ~'--caws-out-chan]
      (go
-      (binding [~'*request* ~'--caws-request
-                ~'*input* ~'--caws-in-chan
-                ~'*output* ~'--caws-out-chan
-                ~'*response* (http/empty-response)]
+      (binding [*request* ~'--caws-request
+                *input* ~'--caws-in-chan
+                *output* ~'--caws-out-chan
+                *response* (http/empty-response)]
         (try
          (set-headers! {:content-type "text/javascript"})
-         (set-body! (slurp (io/file (io/resource (str ~internal-base (remove-prefix ~external-base (:path ~'*request*)))))))
+         (set-body! (slurp (io/file (io/resource (str ~internal-base (remove-prefix ~external-base (:path *request*)))))))
          (finish)
          (catch Exception e
            (handle-error e)))))))
