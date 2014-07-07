@@ -175,17 +175,17 @@
 (defn GET [key] ((:get *request*) key))
 (defn POST [key] ((:post *request*) key))
 
-(defn ->param-getter [param-type]
+(defn ->param-getter [param-type name]
   (assert (or (= :get param-type) (= :post param-type)) param-type)
-  ({:get GET :post POST} param-type))
+  `((~param-type *request*) ~(str name)))
 
-(defn ->lookup-pair [[param-type name]] `[~name (~(->param-getter param-type) ~(str name))])
+(defn ->lookup-pair [[param-type name]] `[~name ~(->param-getter param-type name)])
 
 (defn remove-prefix [prefix str]
   (.substring str (count prefix)))
 
 (defn parse-view-params [params]
-  (vec (concat [(first params) '*request*]
+  (vec (concat `[~(first params) *request*]
                (apply concat (map ->lookup-pair (partition 2 (rest params)))))))
 
 (defmacro view [name params & body]
