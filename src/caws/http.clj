@@ -90,17 +90,17 @@
   (doseq [pair (seq headers)]
     (let [k (first pair) v (second pair)]
       (.write socket-channel
-              (util/string->buffer (str (subs (str k) 1) ":" v "\n"))))))
+              (util/string->buffer (str (subs (str k) 1) ": " v "\r\n"))))))
 
 (defn write-response-code [code socket-channel]
   (let [numeric (symbol->code code)]
-    (.write socket-channel (util/string->buffer (str "HTTP " numeric " " (code->string numeric) "\n")))))
+    (.write socket-channel (util/string->buffer (str "HTTP/1.0 " numeric " " (code->string numeric) "\r\n")))))
 
 (defn write-response [request response socket-channel]
   (println "RS" (:method request) (:path request) (:code response) (:headers response))
   (write-response-code (:code response) socket-channel)
   (write-headers (:headers response) socket-channel)
-  (let [body-buffer (util/string->buffer (str "\n\n" (:body response)))]
+  (let [body-buffer (util/string->buffer (str "\r\n\r\n" (:body response)))]
     (while (> (.remaining body-buffer) 0)
            (.write socket-channel body-buffer))))
 
