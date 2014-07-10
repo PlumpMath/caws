@@ -120,17 +120,25 @@
   (set! *response* (assoc *response* :body s)))
 
 (defn ensure-finished [response]
-  (assert response)
+  (assert (not (nil? response)))
+
   (if (and (not (nil? (:code response))) (not (nil? (:body response))))
     response
     (assoc response
-      :code (or (:code response) :ok)
-      :body (or (:body response) ""))))
+      :code (if (nil? (:code response)) :ok (:code response))
+      :body (if (nil? (:body response)) "" (:body response)))))
 
 (defmacro finish []
   `(do
-     (>! *output* (ensure-finished *response*))
-     (>! *output* :end)))
+     (let [r# (ensure-finished *response*)]
+       (assert (not (nil? r#)))
+       (assert (not (nil? *output*)))
+
+       (println "output" *output*)
+       (println "response" r#)
+
+       (>! *output* r#)
+       (>! *output* :end))))
 
 (defmacro handle-error [e]
   `(let [e# ~e]
