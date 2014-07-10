@@ -120,6 +120,7 @@
   (set! *response* (assoc *response* :body s)))
 
 (defn ensure-finished [response]
+  (assert response)
   (if (and (not (nil? (:code response))) (not (nil? (:body response))))
     response
     (assoc response
@@ -212,7 +213,7 @@
                 *output* ~'--caws-out-chan
                 *response* (http/empty-response)]
         (try
-         (set-headers! {:content-type content-type})
+         (set-headers! {:content-type ~content-type})
          (set-body! (slurp (io/file (io/resource (str ~internal-base (remove-prefix ~external-base (:path *request*)))))))
          (finish)
          (catch Exception e
