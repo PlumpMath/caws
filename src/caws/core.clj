@@ -203,7 +203,8 @@
          (catch Exception e
            (handle-error e)))))))
 
-(defmacro static-view [name internal-base external-base]
+(defmacro static-view [name internal-base external-base &{:keys [content-type]
+                                                          :or {content-type "text"}}]
   `(defn ~name [~'--caws-request ~'--caws-in-chan ~'--caws-out-chan]
      (go
       (binding [*request* ~'--caws-request
@@ -211,7 +212,7 @@
                 *output* ~'--caws-out-chan
                 *response* (http/empty-response)]
         (try
-         (set-headers! {:content-type "text/javascript"})
+         (set-headers! {:content-type content-type})
          (set-body! (slurp (io/file (io/resource (str ~internal-base (remove-prefix ~external-base (:path *request*)))))))
          (finish)
          (catch Exception e

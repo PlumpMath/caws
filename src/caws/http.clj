@@ -62,9 +62,10 @@
       (subs path 0 q-mark))))
 
 (defn parse-post-body [headers body]
-  (if (= "application/x-www-form-urlencoded" (headers :content-type))
-    (parse-params body)
-    {}))
+  (let [content-type (:content-type headers)]
+    (if (and content-type (.startsWith content-type "application/x-www-form-urlencoded"))
+      (parse-params body)
+      {})))
 
 (defn parse-request [request-string]
   "returns [method path headers body]"
